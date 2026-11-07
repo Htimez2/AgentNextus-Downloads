@@ -1,0 +1,31 @@
+name: Publish verified preview assets
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Existing draft preview tag
+        required: true
+        default: v1.0.0-preview.1
+permissions:
+  contents: write
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download verified binary artifacts and check individual hashes
+        env:
+          SOURCE_ARTIFACTS: ${{ secrets.NEXTUS_RELEASE_ARTIFACT_URLS }}
+          RELEASE_TAG: ${{ inputs.release }}
+        run: python3 .github/scripts/mirror-preview.py
+      - name: Upload only release packages, checksums and public download metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release }}
+        shell: bash
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          mapfile -t files < transfer/release-files.txt
+          gh release upload "$RELEASE_TAG" "${files[@]}" transfer/SHA256SUMS.txt transfer/download-manifest.json --clobber
+          echo 'Verified binaries uploaded to draft release. Publication is a separate owner-controlled step.'
