@@ -1,0 +1,46 @@
+name: Publish release from agentnextus.com
+# Publishes a desktop release whose verified packages were uploaded to agentnextus.com/releases/<version>/ by the
+# AgentNextus build. Uses only this repository's own token.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Desktop version, for example 1.0.0-preview.3
+        required: true
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download and verify packages
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]+)?$ ]]
+          mkdir out && cd out
+          base="https://agentnextus.com/releases/$VERSION"
+          curl -sSfL --retry 4 "$base/SHA256SUMS.txt" -o SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          while read -r sum name; do
+            [[ "$name" =~ ^Agent-Nextus-"$VERSION"-[A-Za-z0-9_.-]+$ ]] || { echo "Unexpected file $name"; exit 1; }
+            curl -sSfL --retry 4 "$base/$name" -o "$name"
+          done < SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          for f in win-x64.exe mac-arm64.dmg mac-x64.dmg linux-x86_64.AppImage linux-amd64.deb; do test -s "Agent-Nextus-$VERSION-$f"; done
+      - name: Create the public release
+        run: |
+          set -euo pipefail
+          notes="release-notes/v$VERSION.md"; test -s "$notes"
+          n=$(echo "$VERSION" | sed -n 's/.*-preview\.\([0-9]*\)$/\1/p')
+          title="Agent Nextus ${VERSION%%-*}${n:+ — desktop preview $n}"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" out/* --clobber
+          else
+            gh release create "v$VERSION" out/* --title "$title" --notes-file "$notes" ${n:+--prerelease} --target "$GITHUB_SHA"
+          fi
+          gh release view "v$VERSION" --json url,isDraft,assets --jq '{url, isDraft, assets: [.assets[] | {name, size}]}'
